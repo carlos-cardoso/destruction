@@ -81,8 +81,30 @@ void handleRoot() {
   server.send(200, "text/plain", "hello from esp8266!");
  }
 
+const char* html_message = "<html> <head> <title>Robot Control</title><head>"
+ "<body><h3>Wifi Robot NodeMCU  Web Server</h1>"
+ "<table> "
+ "<tr>"
+ "<td><p><a href=\"/car?a=1\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">\\</button></a></p> "
+ "<td><p><a href=\"/car?a=2\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">^</button></a></p> "
+ "<td><p><a href=\"/car?a=3\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">/</button></a></p> "
+ "<tr>"
+ "<td><p><a href=\"/car?a=4\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\"> < </button></a></p> "
+ "<td><p><a href=\"/car?a=5\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\"> X </button></a></p> "
+ "<td><p><a href=\"/car?a=5\"><button style=\"width:100;height:100;font-size:40px;\" class=\"button\">Stop</button></a></p> "
+ "<td><p><a href=\"/car?a=6\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\"> > </button></a></p> "
+ "<tr>"
+ "<td><p><a href=\"/car?a=7\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">/</button></a></p> "
+ "<td><p><a href=\"/car?a=8\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">v</button></a></p> "
+ "<td><p><a href=\"/car?a=9\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">\\</button></a></p> "
+ "</table> "
+ "<p><a href=\"/car?a=99\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">DETONATE</button></a></p> "
+ "<p><a href=\"/car?a=5\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">STOP</button></a></p> "
+ "<p><a href=\"/car?a=80\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">SERVO</button></a></p> "
+ "</body></html>";
+
+
 void handleCar() {
- String message = "";
  int BtnValue = 0;
   for (uint8_t i = 0; i < server.args(); i++) {
     if (server.argName(i)=="a")
@@ -208,28 +230,7 @@ void handleCar() {
     digitalWrite(Led4_pin,LOW);
   }
  */
-  message += "<html> <head> <title>Robot Control</title><head>";
-  message += "<body><h3>Wifi Robot NodeMCU  Web Server</h1>";
-  message += "<table> ";
-  message += "<tr>";
-  message += "<td><p><a href=\"/car?a=1\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">\\</button></a></p> ";
-  message += "<td><p><a href=\"/car?a=2\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">^</button></a></p> ";
-  message += "<td><p><a href=\"/car?a=3\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">/</button></a></p> ";
-  message += "<tr>";
-  message += "<td><p><a href=\"/car?a=4\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\"> < </button></a></p> ";
-  message += "<td><p><a href=\"/car?a=5\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\"> X </button></a></p> ";
-  //message += "<td><p><a href=\"/car?a=5\"><button style=\"width:100;height:100;font-size:40px;\" class=\"button\">Stop</button></a></p> ";
-  message += "<td><p><a href=\"/car?a=6\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\"> > </button></a></p> ";
-  message += "<tr>";
-  message += "<td><p><a href=\"/car?a=7\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">/</button></a></p> ";
-  message += "<td><p><a href=\"/car?a=8\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">v</button></a></p> ";
-  message += "<td><p><a href=\"/car?a=9\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">\\</button></a></p> ";
-  message += "</table> ";
-  message += "<p><a href=\"/car?a=99\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">DETONATE</button></a></p> ";
-  message += "<p><a href=\"/car?a=5\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">STOP</button></a></p> ";
-  message += "<p><a href=\"/car?a=80\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">SERVO</button></a></p> ";
-  message += "</body></html>";
-  server.send(200, "text/html", message);
+  server.send(200, "text/html", html_message);
  }
 
 void setup(){
