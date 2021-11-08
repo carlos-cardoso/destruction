@@ -15,7 +15,8 @@ ESP8266WebServer server(80);
 // Set your Static IP address
 //IPAddress local_IP(192, 168, 1, 184);
 //IPAddress local_IP(192, 168, 43, 240);
-IPAddress local_IP(172,20,10,10);
+//IPAddress local_IP(172,20,10,10);
+IPAddress local_IP(192, 168, 137, 174);
 // Set your Gateway IP address
 IPAddress gateway(192, 168, 1, 1);
 
@@ -31,7 +32,14 @@ Adafruit_DCMotor *myDet2 = AFMS.getMotor(4);
 
 Servo servo;
 
+int SERVO_POS{90};
+int SERVO_DIR{1};
+unsigned int last_servo{0};
+
+
+
 void detonate(){
+/*
   // Set the speed to start, from 0 (off) to 255 (max speed)
   myDet1->setSpeed(255);
   myDet1->run(FORWARD);
@@ -49,6 +57,12 @@ void detonate(){
   myDet2->run(RELEASE);
   delay(5);
   myDet2->setSpeed(0);
+*/
+
+ SERVO_POS = 180;
+ servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
+ delay(200);
+ SERVO_ON = true;
 
 }
 
@@ -83,7 +97,7 @@ void handleRoot() {
  }
 
 const char* html_message = "<html> <head> <title>Robot Control</title><head>"
- "<body><h3>Wifi Robot NodeMCU  Web Server</h1>"
+ "<body><h3>Wifi </h1>"
  "<table> "
  "<tr>"
  "<td><p><a href=\"/car?a=1\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">\\</button></a></p> "
@@ -145,7 +159,7 @@ void handleCar() {
      //motorSpeed(900,LOW,HIGH,900,HIGH,LOW);
      //SolSinyal = 1;
      //digitalWrite(Led1_pin,HIGH);
-     myMotorRight->setSpeed(150);
+     myMotorRight->setSpeed(100);
      myMotorRight->run(FORWARD);
      myMotorLeft->setSpeed(0);
      myMotorLeft->run(FORWARD);
@@ -168,7 +182,7 @@ void handleCar() {
      //motorSpeed(900,HIGH,LOW,900,LOW,HIGH);
      //SagSinyal = 1;
     //digitalWrite(Led2_pin,HIGH);
-    myMotorLeft->setSpeed(150);
+    myMotorLeft->setSpeed(100);
     myMotorLeft->run(FORWARD);
     myMotorRight->setSpeed(0);
     myMotorRight->run(FORWARD);
@@ -243,10 +257,6 @@ void handleCar() {
   server.send(200, "text/html", html_message);
  }
 
-int SERVO_POS{90};
-int SERVO_DIR{1};
-unsigned int last_servo{0};
-
 
 void servo_handler(){
    if(SERVO_ON){
@@ -259,7 +269,10 @@ void servo_handler(){
       servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
       //last_servo=millis();
     //delay(15);                       // waits 15ms for the servo to reach the position
-    }
+   }else {
+      SERVO_POS = 0;
+      servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
+   }
 }
 
 
@@ -269,18 +282,16 @@ void setup(){
   delay(10);
   start_motor_shield();
 
-
-
   //https://stackoverflow.com/questions/54907985/esp32-fails-on-set-wifi-hostname
+
   /*
   WiFi.disconnect();
-  iWiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);  // This is a MUST!
+  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);  // This is a MUST!
   if (!WiFi.setHostname("myRobot")) {
       Serial.println("Hostname failed to configure");
   }
   WiFi.begin(ssid, password);
   */
-
 
   // Configures static IP address
   if (!WiFi.config(local_IP, gateway, subnet)){//}, primaryDNS, secondaryDNS)) {
@@ -297,7 +308,7 @@ void setup(){
 
   servo.attach(2); //D4
 
-  server.on("/", handleRoot);
+  server.on("/", handleCar);
   server.on("/car", handleCar);
 
   server.on("/inline", []() {
