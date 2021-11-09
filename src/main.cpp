@@ -32,7 +32,7 @@ Adafruit_DCMotor *myDet2 = AFMS.getMotor(4);
 
 Servo servo;
 
-int SERVO_POS{90};
+int SERVO_POS{180};
 int SERVO_DIR{1};
 unsigned int last_servo{0};
 
@@ -59,9 +59,15 @@ void detonate(){
   myDet2->setSpeed(0);
 */
 
+ SERVO_POS = 0;
+ servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
+ delay(300);
  SERVO_POS = 180;
  servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
- delay(200);
+ delay(300);
+ SERVO_POS = 0;
+ servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
+ delay(300);
  SERVO_ON = true;
 
 }
@@ -270,13 +276,15 @@ void servo_handler(){
       //last_servo=millis();
     //delay(15);                       // waits 15ms for the servo to reach the position
    }else {
-      SERVO_POS = 0;
+      SERVO_POS = 180;
       servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
    }
 }
 
 
 void setup(){
+  servo.attach(2); //D4
+  servo_handler();
   Serial.begin(9600);
   Wire.begin(D1, D2);// join i2c bus with SDA=D1 and SCL=D2 of NodeMCU
   delay(10);
@@ -306,7 +314,6 @@ void setup(){
   // Print the IP address of the device:
   Serial.println(WiFi.localIP());
 
-  servo.attach(2); //D4
 
   server.on("/", handleCar);
   server.on("/car", handleCar);
