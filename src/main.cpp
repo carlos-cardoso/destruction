@@ -313,7 +313,8 @@ void setup(){
   Serial.println("WiFi connected");
   // Print the IP address of the device:
   Serial.println(WiFi.localIP());
-
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
 
   server.on("/", handleCar);
   server.on("/car", handleCar);
