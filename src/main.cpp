@@ -1,88 +1,236 @@
-#include <SPI.h>
-#include <Arduino.h>
-#include <Adafruit_MotorShield.h>
-//#include <ESP8266HTTPclient.h>
-#include <ESP8266WiFi.h>
-#include <WiFiClient.h>
+#include "FS.h"
+#include "NidayandHelper.h"
+#include "index_html.h"
+#include <ArduinoJson.h>
+#include <ArduinoOTA.h>
 #include <ESP8266WebServer.h>
+#include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
-#include <Servo.h>
+#include <PubSubClient.h>
+#include <Stepper_28BYJ_48.h>
+#include <WebSocketsServer.h>
+#include <WiFiClient.h>
+#include <WiFiManager.h>
+#include <WiFiUdp.h>
 
-bool SERVO_ON{false};
-const char* ssid = "iPhone de my mac";
-const char* password = "#amialive#";
-ESP8266WebServer server(80);
-// Set your Static IP address
-//IPAddress local_IP(192, 168, 1, 184);
-//IPAddress local_IP(192, 168, 43, 240);
-//IPAddress local_IP(172,20,10,10);
-IPAddress local_IP(192, 168, 137, 174);
-// Set your Gateway IP address
-IPAddress gateway(192, 168, 1, 1);
+//--------------- CHANGE PARAMETERS ------------------
+// Configure Default Settings for Access Point logon
+String APid = "BlindsConnectAP"; // Name of access point
+String APpw = "nidayand";        // Hardcoded password for access point
 
-IPAddress subnet(255, 255, 0, 0);
-//IPAddress primaryDNS(8, 8, 8, 8);   //optional
-//IPAddress secondaryDNS(8, 8, 4, 4); //optional
+//----------------------------------------------------
 
-Adafruit_MotorShield AFMS = Adafruit_MotorShield();
-Adafruit_DCMotor *myMotorRight = AFMS.getMotor(1);
-Adafruit_DCMotor *myMotorLeft = AFMS.getMotor(2);
-Adafruit_DCMotor *myDet1 = AFMS.getMotor(3);
-Adafruit_DCMotor *myDet2 = AFMS.getMotor(4);
+// Version number for checking if there are new code releases and notifying the
+// user
+String version = "1.3.1";
 
-Servo servo;
+NidayandHelper helper = NidayandHelper();
 
-int SERVO_POS{180};
-int SERVO_DIR{1};
-unsigned int last_servo{0};
+// Fixed settings for WIFI
+WiFiClient espClient;
+PubSubClient psclient(espClient); // MQTT client
+char mqtt_server[40];             // WIFI config: MQTT server config (optional)
+char mqtt_port[6] = "1883";       // WIFI config: MQTT port config (optional)
+char mqtt_uid[40]; // WIFI config: MQTT server username (optional)
+char mqtt_pwd[40]; // WIFI config: MQTT server password (optional)
 
+String outputTopic; // MQTT topic for sending messages
+String inputTopic;  // MQTT topic for listening
+boolean mqttActive = true;
+char config_name[40];               // WIFI config: Bonjour name of device
+char config_rotation[40] = "false"; // WIFI config: Detault rotation is CCW
 
+String action;              // Action manual/auto
+int path = 0;               // Direction of blind (1 = down, 0 = stop, -1 = up)
+int setPos = 0;             // The set position 0-100% by the client
+long currentPosition = 0;   // Current position of the blind
+long maxPosition = 2000000; // Max position of the blind. Initial value
+boolean loadDataSuccess = false;
+boolean saveItNow = false; // If true will store positions to SPIFFS
+bool shouldSaveConfig =
+    false;               // Used for WIFI Manager callback to save parameters
+boolean initLoop = true; // To enable actions first time the loop is run
+boolean ccw = true;      // Turns counter clockwise to lower the curtain
 
-void detonate(){
-/*
-  // Set the speed to start, from 0 (off) to 255 (max speed)
-  myDet1->setSpeed(255);
-  myDet1->run(FORWARD);
-  // turn on motor
-  delay(5);
-  myDet1->run(RELEASE);
-  delay(5);
-  myDet1->setSpeed(0);
+Stepper_28BYJ_48 small_stepper(D1, D3, D2, D4); // Initiate stepper driver
 
-  // Set the speed to start, from 0 (off) to 255 (max speed)
-  myDet2->setSpeed(255);
-  myDet2->run(FORWARD);
-  // turn on motor
-  delay(5);
-  myDet2->run(RELEASE);
-  delay(5);
-  myDet2->setSpeed(0);
-*/
+ESP8266WebServer
+    server(80); // TCP server at port 80 will respond to HTTP requests
+WebSocketsServer webSocket =
+    WebSocketsServer(81); // WebSockets will respond on port 81
 
- SERVO_POS = 0;
- servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
- delay(300);
- SERVO_POS = 180;
- servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
- delay(300);
- SERVO_POS = 0;
- servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
- delay(300);
- SERVO_ON = true;
-
-}
-
-void start_motor_shield(){
-  Serial.println("Adafruit Motorshield v2 - DC Motor test!");
-
-  if (!AFMS.begin()) {         // create with the default frequency 1.6KHz
-  // if (!AFMS.begin(1000)) {  // OR with a different frequency, say 1KHz
-    Serial.println("Could not find Motor Shield. Check wiring.");
-    while (1);
+bool loadConfig() {
+  if (!helper.loadconfig()) {
+    return false;
   }
-  Serial.println("Motor Shield found.");
+  JsonVariant json = helper.getconfig();
+
+  // Store variables locally
+  currentPosition = long(json["currentPosition"]);
+  maxPosition = long(json["maxPosition"]);
+  strcpy(config_name, json["config_name"]);
+  strcpy(mqtt_server, json["mqtt_server"]);
+  strcpy(mqtt_port, json["mqtt_port"]);
+  strcpy(mqtt_uid, json["mqtt_uid"]);
+  strcpy(mqtt_pwd, json["mqtt_pwd"]);
+  strcpy(config_rotation, json["config_rotation"]);
+
+  return true;
 }
 
+/**
+   Save configuration data to a JSON file
+   on SPIFFS
+*/
+bool saveConfig() {
+  StaticJsonBuffer<200> jsonBuffer;
+  JsonObject &json = jsonBuffer.createObject();
+  json["currentPosition"] = currentPosition;
+  json["maxPosition"] = maxPosition;
+  json["config_name"] = config_name;
+  json["mqtt_server"] = mqtt_server;
+  json["mqtt_port"] = mqtt_port;
+  json["mqtt_uid"] = mqtt_uid;
+  json["mqtt_pwd"] = mqtt_pwd;
+  json["config_rotation"] = config_rotation;
+
+  return helper.saveconfig(json);
+}
+
+/*
+   Connect to MQTT server and publish a message on the bus.
+   Finally, close down the connection and radio
+*/
+void sendmsg(String topic, String payload) {
+  if (!mqttActive)
+    return;
+
+  helper.mqtt_publish(psclient, topic, payload);
+}
+
+/****************************************************************************************
+ */
+void processMsg(String res, uint8_t clientnum) {
+  /*
+     Check if calibration is running and if stop is received. Store the location
+  */
+  if (action == "set" && res == "(0)") {
+    maxPosition = currentPosition;
+    saveItNow = true;
+  }
+
+  /*
+     Below are actions based on inbound MQTT payload
+  */
+  if (res == "(start)") {
+    /*
+       Store the current position as the start position
+    */
+    currentPosition = 0;
+    path = 0;
+    saveItNow = true;
+    action = "manual";
+  } else if (res == "(max)") {
+    /*
+       Store the max position of a closed blind
+    */
+    maxPosition = currentPosition;
+    path = 0;
+    saveItNow = true;
+    action = "manual";
+  } else if (res == "(0)") {
+    /*
+       Stop
+    */
+    path = 0;
+    saveItNow = true;
+    action = "manual";
+  } else if (res == "(1)") {
+    /*
+       Move down without limit to max position
+    */
+    path = 1;
+    action = "manual";
+  } else if (res == "(-1)") {
+    /*
+       Move up without limit to top position
+    */
+    path = -1;
+    action = "manual";
+  } else if (res == "(update)") {
+    // Send position details to client
+    int set = (setPos * 100) / maxPosition;
+    int pos = (currentPosition * 100) / maxPosition;
+    sendmsg(outputTopic, "{ \"set\":" + String(set) +
+                             ", \"position\":" + String(pos) + " }");
+    String str =
+        "{ \"set\":" + String(set) + ", \"position\":" + String(pos) + " }";
+    webSocket.sendTXT(clientnum, str);
+  } else if (res == "(ping)") {
+    // Do nothing
+  } else {
+    /*
+       Any other message will take the blind to a position
+       Incoming value = 0-100
+       path is now the position
+    */
+    path = maxPosition * res.toInt() / 100;
+    setPos = path; // Copy path for responding to updates
+    action = "auto";
+
+    int set = (setPos * 100) / maxPosition;
+    int pos = (currentPosition * 100) / maxPosition;
+
+    // Send the instruction to all connected devices
+    sendmsg(outputTopic, "{ \"set\":" + String(set) +
+                             ", \"position\":" + String(pos) + " }");
+    String str =
+        "{ \"set\":" + String(set) + ", \"position\":" + String(pos) + " }";
+    webSocket.broadcastTXT(str);
+  }
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload,
+                    size_t length) {
+  switch (type) {
+  case WStype_TEXT:
+    Serial.printf("[%u] get Text: %s\n", num, payload);
+
+    String res = (char *)payload;
+
+    // Send to common MQTT and websocket function
+    processMsg(res, num);
+    break;
+  }
+}
+void mqttCallback(char *topic, byte *payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  String res = "";
+  for (int i = 0; i < length; i++) {
+    res += String((char)payload[i]);
+  }
+  processMsg(res, NULL);
+}
+
+/**
+  Turn of power to coils whenever the blind
+  is not moving
+*/
+void stopPowerToCoils() {
+  digitalWrite(D1, LOW);
+  digitalWrite(D2, LOW);
+  digitalWrite(D3, LOW);
+  digitalWrite(D4, LOW);
+}
+
+/*
+   Callback from WIFI Manager for saving configuration
+*/
+void saveConfigCallback() { shouldSaveConfig = true; }
+
+void handleRoot() { server.send(200, "text/html", INDEX_HTML); }
 void handleNotFound() {
   String message = "File Not Found\n\n";
   message += "URI: ";
@@ -98,242 +246,259 @@ void handleNotFound() {
   server.send(404, "text/plain", message);
 }
 
-void handleRoot() {
-  server.send(200, "text/plain", "hello from esp8266!");
- }
+void setup(void) {
+  Serial.begin(115200);
+  delay(100);
+  Serial.print("Starting now\n");
 
-const char* html_message = "<html> <head> <title>Robot Control</title><head>"
- "<body><h3>Wifi </h1>"
- "<table> "
- "<tr>"
- "<td><p><a href=\"/car?a=1\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">\\</button></a></p> "
- "<td><p><a href=\"/car?a=2\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">^</button></a></p> "
- "<td><p><a href=\"/car?a=3\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">/</button></a></p> "
- "<tr>"
- "<td><p><a href=\"/car?a=4\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\"> < </button></a></p> "
- "<td><p><a href=\"/car?a=5\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\"> X </button></a></p> "
- "<td><p><a href=\"/car?a=6\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\"> > </button></a></p> "
- "<tr>"
- "<td><p><a href=\"/car?a=7\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">/</button></a></p> "
- "<td><p><a href=\"/car?a=8\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">v</button></a></p> "
- "<td><p><a href=\"/car?a=9\"><button style=\"width:100;height:100;font-size:100px;\" class=\"button\">\\</button></a></p> "
- "</table> "
- "<p><a href=\"/car?a=99\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">DETONATE</button></a></p> "
- "<p><a href=\"/car?a=5\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">STOP</button></a></p> "
- "<p><a href=\"/car?a=80\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">SERVON</button></a></p> "
- "<p><a href=\"/car?a=81\"><button style=\"width:300;height:100;font-size:40px;\" class=\"button\">SERVOFF</button></a></p> "
- "</body></html>";
+  // Reset the action
+  action = "";
 
+  // Set MQTT properties
+  outputTopic = helper.mqtt_gettopic("out");
+  inputTopic = helper.mqtt_gettopic("in");
 
-void handleCar() {
- int BtnValue = 0;
-  for (uint8_t i = 0; i < server.args(); i++) {
-    if (server.argName(i)=="a")
-    {
-      String s = server.arg(i);
-      BtnValue = s.toInt();
-    }
-    Serial.println(server.argName(i) + ": " + server.arg(i) + "\n");
+  // Set the WIFI hostname
+  WiFi.hostname(config_name);
+
+  // Define customer parameters for WIFI Manager
+  WiFiManagerParameter custom_config_name("Name", "Bonjour name", config_name,
+                                          40);
+  WiFiManagerParameter custom_rotation("Rotation", "Clockwise rotation",
+                                       config_rotation, 40);
+  WiFiManagerParameter custom_text(
+      "<p><b>Optional MQTT server parameters:</b></p>");
+  WiFiManagerParameter custom_mqtt_server("server", "MQTT server", mqtt_server,
+                                          40);
+  WiFiManagerParameter custom_mqtt_port("port", "MQTT port", mqtt_port, 6);
+  WiFiManagerParameter custom_mqtt_uid("uid", "MQTT username", mqtt_server, 40);
+  WiFiManagerParameter custom_mqtt_pwd("pwd", "MQTT password", mqtt_server, 40);
+  WiFiManagerParameter custom_text2(
+      "<script>t = document.createElement('div');t2 = "
+      "document.createElement('input');t2.setAttribute('type', "
+      "'checkbox');t2.setAttribute('id', 'tmpcheck');t2.setAttribute('style', "
+      "'width:10%');t2.setAttribute('onclick', "
+      "\"if(document.getElementById('Rotation').value == "
+      "'false'){document.getElementById('Rotation').value = 'true'} else "
+      "{document.getElementById('Rotation').value = 'false'}\");t3 = "
+      "document.createElement('label');tn = document.createTextNode('Clockwise "
+      "rotation');t3.appendChild(t2);t3.appendChild(tn);t.appendChild(t3);"
+      "document.getElementById('Rotation').style.display='none';document."
+      "getElementById(\"Rotation\").parentNode.insertBefore(t, "
+      "document.getElementById(\"Rotation\"));</script>");
+  // Setup WIFI Manager
+  WiFiManager wifiManager;
+
+  // reset settings - for testing
+  // clean FS, for testing
+  // helper.resetsettings(wifiManager);
+
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+  // add all your parameters here
+  wifiManager.addParameter(&custom_config_name);
+  wifiManager.addParameter(&custom_rotation);
+  wifiManager.addParameter(&custom_text);
+  wifiManager.addParameter(&custom_mqtt_server);
+  wifiManager.addParameter(&custom_mqtt_port);
+  wifiManager.addParameter(&custom_mqtt_uid);
+  wifiManager.addParameter(&custom_mqtt_pwd);
+  wifiManager.addParameter(&custom_text2);
+
+  wifiManager.autoConnect(APid.c_str(), APpw.c_str());
+
+  // Load config upon start
+  if (!SPIFFS.begin()) {
+    Serial.println("Failed to mount file system");
+    return;
   }
 
-  switch (BtnValue) {
-   case 1: // sola donuş
-      //motorSpeed(900,LOW,LOW,1023,HIGH,LOW);
-      //SolSinyal = 1;
-      //digitalWrite(Led1_pin,HIGH);
-      break;
-   case 2: // düz ileri
-     // motorSpeed(1023,HIGH,LOW,1023,HIGH,LOW);
-     //SolSinyal = 0;
-     //SagSinyal = 0;
-     //digitalWrite(Led1_pin,LOW);
-     //digitalWrite(Led2_pin,LOW);
-     myMotorRight->setSpeed(150);
-     myMotorRight->run(FORWARD);
-     myMotorLeft->setSpeed(150);
-     myMotorLeft->run(FORWARD);
-     //delay(1000);
-     // turn on motor
-
-     break;
-  case  3:// saga donuş
-     //motorSpeed(1023,HIGH,LOW,900,LOW,LOW);
-     //SagSinyal = 1;
-     //digitalWrite(Led2_pin,HIGH);
-     break;
-  case  4:// tam sola donuş
-     //motorSpeed(900,LOW,HIGH,900,HIGH,LOW);
-     //SolSinyal = 1;
-     //digitalWrite(Led1_pin,HIGH);
-     myMotorRight->setSpeed(100);
-     myMotorRight->run(FORWARD);
-     myMotorLeft->setSpeed(0);
-     myMotorLeft->run(FORWARD);
-
-     break;
-  case 5: // stop
-   //motorSpeed(0,LOW,LOW,0,LOW,LOW);
-   //SolSinyal = 0;
-   //SagSinyal = 0;
-   //digitalWrite(Led1_pin,LOW);
-   //digitalWrite(Led2_pin,LOW);
-   //myMotor->setSpeed(0);
-   //myMotor->run(FORWARD);
-   // turn on motor
-   myMotorLeft->run(RELEASE);
-   myMotorRight->run(RELEASE);
-
-   break;
-  case  6://
-     //motorSpeed(900,HIGH,LOW,900,LOW,HIGH);
-     //SagSinyal = 1;
-    //digitalWrite(Led2_pin,HIGH);
-    myMotorLeft->setSpeed(100);
-    myMotorLeft->run(FORWARD);
-    myMotorRight->setSpeed(0);
-    myMotorRight->run(FORWARD);
-    break;
-  case 7://sol geri
-    //motorSpeed(900,LOW,LOW,1023,LOW,HIGH);
-    break;
-  case 8:// tam geri
-    //motorSpeed(900,LOW,HIGH,900,LOW,HIGH);
-     myMotorRight->setSpeed(150);
-     myMotorRight->run(BACKWARD);
-     myMotorLeft->setSpeed(150);
-     myMotorLeft->run(BACKWARD);
-
-    break;
-  case 9:// sag geri
-    //motorSpeed(1023,LOW,HIGH,900,LOW,LOW);
-    break;
-
-  case 99:// sag geri
-    Serial.println("DETONATE");
-    //myMotorLeft->run(RELEASE);
-    //myMotorRight->run(RELEASE);
-    detonate();
-    break;
-
-  case 80://Servo
-    SERVO_ON=true;
-    /*
-    myMotorLeft->run(RELEASE);
-    myMotorRight->run(RELEASE);
-
-    Serial.println("SERVO");
-    for (int pos = 0; pos <= 180; pos += 1) { // goes from 0 degrees to 180 degrees
-    // in steps of 1 degree
-    servo.write(pos);              // tell servo to go to position in variable 'pos'
-    delay(15);                       // waits 15ms for the servo to reach the position
-    }
-    for (int pos = 180; pos >= 0; pos -= 1) { // goes from 180 degrees to 0 degrees
-      servo.write(pos);              // tell servo to go to position in variable 'pos'
-      delay(15);                       // waits 15ms for the servo to reach the position
-    }
-
-    servo.write(90);
-    */
-    break;
-
-  case 81://Servo
-    SERVO_ON=false;
-
-      break;
-
-  default:
-    break;
-  }
-  /*
-  if (BtnValue > 7)
-  {
-    ArkaLamba = 1;
-    SolSinyal = 1;
-    SagSinyal = 1;
-    digitalWrite(Led1_pin,HIGH);
-    digitalWrite(Led2_pin,HIGH);
-    digitalWrite(Led4_pin,HIGH);
-  }
-  else
-  {
-    ArkaLamba = 0;
-    digitalWrite(Led4_pin,LOW);
-  }
- */
-  server.send(200, "text/html", html_message);
- }
-
-
-void servo_handler(){
-   if(SERVO_ON){
-      if(SERVO_POS >= 180){
-        SERVO_DIR=-1;
-      }else if (SERVO_POS <= 0){
-        SERVO_DIR=1;
-      }
-      SERVO_POS += SERVO_DIR;
-      servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
-      //last_servo=millis();
-    //delay(15);                       // waits 15ms for the servo to reach the position
-   }else {
-      SERVO_POS = 180;
-      servo.write(SERVO_POS);              // tell servo to go to position in variable 'pos'
-   }
-}
-
-
-void setup(){
-  servo.attach(2); //D4
-  servo_handler();
-  Serial.begin(9600);
-  Wire.begin(D1, D2);// join i2c bus with SDA=D1 and SCL=D2 of NodeMCU
-  delay(10);
-  start_motor_shield();
-
-  //https://stackoverflow.com/questions/54907985/esp32-fails-on-set-wifi-hostname
-
-  /*
-  WiFi.disconnect();
-  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);  // This is a MUST!
-  if (!WiFi.setHostname("myRobot")) {
-      Serial.println("Hostname failed to configure");
-  }
-  WiFi.begin(ssid, password);
+  /* Save the config back from WIFI Manager.
+      This is only called after configuration
+      when in AP mode
   */
+  if (shouldSaveConfig) {
+    // read updated parameters
+    strcpy(config_name, custom_config_name.getValue());
+    strcpy(mqtt_server, custom_mqtt_server.getValue());
+    strcpy(mqtt_port, custom_mqtt_port.getValue());
+    strcpy(mqtt_uid, custom_mqtt_uid.getValue());
+    strcpy(mqtt_pwd, custom_mqtt_pwd.getValue());
+    strcpy(config_rotation, custom_rotation.getValue());
 
-  // Configures static IP address
-  if (!WiFi.config(local_IP, gateway, subnet)){//}, primaryDNS, secondaryDNS)) {
-    Serial.println("STA Failed to configure");
+    // Save the data
+    saveConfig();
   }
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+
+  /*
+     Try to load FS data configuration every time when
+     booting up. If loading does not work, set the default
+     positions
+  */
+  loadDataSuccess = loadConfig();
+  if (!loadDataSuccess) {
+    currentPosition = 0;
+    maxPosition = 2000000;
   }
-  Serial.println("WiFi connected");
-  // Print the IP address of the device:
+
+  /*
+    Setup multi DNS (Bonjour)
+    */
+  if (MDNS.begin(config_name)) {
+    Serial.println("MDNS responder started");
+    MDNS.addService("http", "tcp", 80);
+    MDNS.addService("ws", "tcp", 81);
+
+  } else {
+    Serial.println("Error setting up MDNS responder!");
+    while (1) {
+      delay(1000);
+    }
+  }
+  Serial.print("Connect to http://" + String(config_name) +
+               ".local or http://");
   Serial.println(WiFi.localIP());
-  WiFi.setAutoReconnect(true);
-  WiFi.persistent(true);
 
-  server.on("/", handleCar);
-  server.on("/car", handleCar);
-
-  server.on("/inline", []() {
-    server.send(200, "text/plain", "this works as well");
-  });
-
+  // Start HTTP server
+  server.on("/", handleRoot);
   server.onNotFound(handleNotFound);
-
   server.begin();
-  Serial.println("HTTP server started");
+
+  // Start websocket
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+
+  /* Setup connection for MQTT and for subscribed
+    messages IF a server address has been entered
+  */
+  if (String(mqtt_server) != "") {
+    Serial.println("Registering MQTT server");
+    psclient.setServer(mqtt_server, String(mqtt_port).toInt());
+    psclient.setCallback(mqttCallback);
+
+  } else {
+    mqttActive = false;
+    Serial.println("NOTE: No MQTT server address has been registered. Only "
+                   "using websockets");
+  }
+
+  /* Set rotation direction of the blinds */
+  if (String(config_rotation) == "false") {
+    ccw = true;
+  } else {
+    ccw = false;
+  }
+
+  // Update webpage
+  INDEX_HTML.replace("{VERSION}", "V" + version);
+  INDEX_HTML.replace("{NAME}", String(config_name));
+
+  // Setup OTA
+  // helper.ota_setup(config_name);
+  {
+    // Authentication to avoid unauthorized updates
+    // ArduinoOTA.setPassword(OTA_PWD);
+
+    ArduinoOTA.setHostname(config_name);
+
+    ArduinoOTA.onStart([]() { Serial.println("Start"); });
+    ArduinoOTA.onEnd([]() { Serial.println("\nEnd"); });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+      Serial.printf("Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR)
+        Serial.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR)
+        Serial.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR)
+        Serial.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR)
+        Serial.println("Receive Failed");
+      else if (error == OTA_END_ERROR)
+        Serial.println("End Failed");
+    });
+    ArduinoOTA.begin();
+  }
 }
 
+void loop(void) {
+  // OTA client code
+  ArduinoOTA.handle();
 
-void loop() {
+  // Websocket listner
+  webSocket.loop();
+
+  /**
+    Serving the webpage
+  */
   server.handleClient();
-  if(millis()-last_servo>15){
-      servo_handler();
-      last_servo=millis();
+
+  // MQTT client
+  if (mqttActive) {
+    helper.mqtt_reconnect(psclient, mqtt_uid, mqtt_pwd, {inputTopic.c_str()});
+  }
+
+  /**
+    Storing positioning data and turns off the power to the coils
+  */
+  if (saveItNow) {
+    saveConfig();
+    saveItNow = false;
+
+    /*
+      If no action is required by the motor make sure to
+      turn off all coils to avoid overheating and less energy
+      consumption
+    */
+    stopPowerToCoils();
+  }
+
+  /**
+    Manage actions. Steering of the blind
+  */
+  if (action == "auto") {
+    /*
+       Automatically open or close blind
+    */
+    if (currentPosition > path) {
+      small_stepper.step(ccw ? -1 : 1);
+      currentPosition = currentPosition - 1;
+    } else if (currentPosition < path) {
+      small_stepper.step(ccw ? 1 : -1);
+      currentPosition = currentPosition + 1;
+    } else {
+      path = 0;
+      action = "";
+      int set = (setPos * 100) / maxPosition;
+      int pos = (currentPosition * 100) / maxPosition;
+
+      String str =
+          "{ \"set\":" + String(set) + ", \"position\":" + String(pos) + " }";
+      webSocket.broadcastTXT(str);
+      sendmsg(outputTopic, "{ \"set\":" + String(set) +
+                               ", \"position\":" + String(pos) + " }");
+      Serial.println("Stopped. Reached wanted position");
+      saveItNow = true;
+    }
+
+  } else if (action == "manual" && path != 0) {
+    /*
+       Manually running the blind
+    */
+    small_stepper.step(ccw ? path : -path);
+    currentPosition = currentPosition + path;
+  }
+
+  /*
+     After running setup() the motor might still have
+     power on some of the coils. This is making sure that
+     power is off the first time loop() has been executed
+     to avoid heating the stepper motor draining
+     unnecessary current
+  */
+  if (initLoop) {
+    initLoop = false;
+    stopPowerToCoils();
   }
 }
