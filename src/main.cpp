@@ -246,8 +246,9 @@ void handleNotFound() {
   server.send(404, "text/plain", message);
 }
 
+/*
 void setup(void) {
-  Serial.begin(115200);
+  Serial.begin(9600);
   delay(100);
   Serial.print("Starting now\n");
 
@@ -312,117 +313,175 @@ void setup(void) {
     return;
   }
 
-  /* Save the config back from WIFI Manager.
-      This is only called after configuration
-      when in AP mode
-  */
-  if (shouldSaveConfig) {
-    // read updated parameters
-    strcpy(config_name, custom_config_name.getValue());
-    strcpy(mqtt_server, custom_mqtt_server.getValue());
-    strcpy(mqtt_port, custom_mqtt_port.getValue());
-    strcpy(mqtt_uid, custom_mqtt_uid.getValue());
-    strcpy(mqtt_pwd, custom_mqtt_pwd.getValue());
-    strcpy(config_rotation, custom_rotation.getValue());
+  // Save the config back from WIFI Manager.
+  //    This is only called after configuration
+  //    when in AP mode
+  //
+if (shouldSaveConfig) {
+  // read updated parameters
+  strcpy(config_name, custom_config_name.getValue());
+  strcpy(mqtt_server, custom_mqtt_server.getValue());
+  strcpy(mqtt_port, custom_mqtt_port.getValue());
+  strcpy(mqtt_uid, custom_mqtt_uid.getValue());
+  strcpy(mqtt_pwd, custom_mqtt_pwd.getValue());
+  strcpy(config_rotation, custom_rotation.getValue());
 
-    // Save the data
-    saveConfig();
+  // Save the data
+  saveConfig();
+}
+
+ //  Try to load FS data configuration every time when
+ //  booting up. If loading does not work, set the default
+ //  positions
+loadDataSuccess = loadConfig();
+if (!loadDataSuccess) {
+  currentPosition = 0;
+  maxPosition = 2000000;
+}
+
+ // Setup multi DNS (Bonjour)
+if (MDNS.begin(config_name)) {
+  Serial.println("MDNS responder started");
+  MDNS.addService("http", "tcp", 80);
+  MDNS.addService("ws", "tcp", 81);
+
+} else {
+  Serial.println("Error setting up MDNS responder!");
+  while (1) {
+    delay(1000);
   }
+}
+Serial.print("Connect to http://" + String(config_name) + ".local or http://");
+Serial.println(WiFi.localIP());
 
-  /*
-     Try to load FS data configuration every time when
-     booting up. If loading does not work, set the default
-     positions
-  */
-  loadDataSuccess = loadConfig();
-  if (!loadDataSuccess) {
-    currentPosition = 0;
-    maxPosition = 2000000;
-  }
+// Start HTTP server
+server.on("/", handleRoot);
+server.onNotFound(handleNotFound);
+server.begin();
 
-  /*
-    Setup multi DNS (Bonjour)
-    */
-  if (MDNS.begin(config_name)) {
-    Serial.println("MDNS responder started");
-    MDNS.addService("http", "tcp", 80);
-    MDNS.addService("ws", "tcp", 81);
+// Start websocket
+webSocket.begin();
+webSocket.onEvent(webSocketEvent);
 
+// Setup connection for MQTT and for subscribed
+//  messages IF a server address has been entered
+if (String(mqtt_server) != "") {
+  Serial.println("Registering MQTT server");
+  psclient.setServer(mqtt_server, String(mqtt_port).toInt());
+  psclient.setCallback(mqttCallback);
+
+} else {
+  mqttActive = false;
+  Serial.println("NOTE: No MQTT server address has been registered. Only "
+                 "using websockets");
+}
+// Set rotation direction of the blinds
+if (String(config_rotation) == "false") {
+  ccw = true;
+} else {
+  ccw = false;
+}
+
+// Update webpage
+INDEX_HTML.replace("{VERSION}", "V" + version);
+INDEX_HTML.replace("{NAME}", String(config_name));
+
+// Setup OTA
+// helper.ota_setup(config_name);
+{
+  // Authentication to avoid unauthorized updates
+  // ArduinoOTA.setPassword(OTA_PWD);
+
+  ArduinoOTA.setHostname(config_name);
+
+  ArduinoOTA.onStart([]() { Serial.println("Start"); });
+  ArduinoOTA.onEnd([]() { Serial.println("\nEnd"); });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR)
+      Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR)
+      Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR)
+      Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR)
+      Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR)
+      Serial.println("End Failed");
+  });
+  ArduinoOTA.begin();
+}
+}
+*/
+
+const int motionSensor = 15; // D8
+#define timeSeconds 2
+unsigned long now = 0;
+unsigned long lastTrigger = 0;
+boolean startTimer = false;
+
+// Checks if motion was detected, sets LED HIGH and starts a timer
+void IRAM_ATTR detectsMovement() {
+  Serial.println("MOTION DETECTED!!!");
+  // digitalWrite(led, HIGH);
+  startTimer = true;
+  lastTrigger = millis();
+}
+
+void setup() {
+  Serial.begin(9600);
+  delay(100);
+  Serial.print("Starting now\n");
+  currentPosition = 0;
+  maxPosition = 2000000;
+  // rotation direction
+  ccw = true;
+
+  // PIR Motion Sensor mode INPUT_PULLUP
+  pinMode(motionSensor, INPUT_PULLUP);
+  // Set motionSensor pin as interrupt, assign interrupt function and set RISING
+  // mode
+  attachInterrupt(digitalPinToInterrupt(motionSensor), detectsMovement, RISING);
+}
+
+void loop() {
+
+  static uint32_t last_move_ms{0};
+
+  // Current time
+  now = millis();
+  // Turn off the LED after the number of seconds defined in the timeSeconds
+  // variable
+  if (startTimer && (now - lastTrigger > (timeSeconds * 1000))) {
+    Serial.println("Motion stopped...");
+    // digitalWrite(led, LOW);
+    startTimer = false;
+    stopPowerToCoils();
   } else {
-    Serial.println("Error setting up MDNS responder!");
-    while (1) {
-      delay(1000);
+    if (startTimer && millis() - last_move_ms > 200) {
+      long path = 1;
+      small_stepper.step(ccw ? path : -path);
+      currentPosition = currentPosition + path;
+      last_move_ms = millis();
     }
   }
-  Serial.print("Connect to http://" + String(config_name) +
-               ".local or http://");
-  Serial.println(WiFi.localIP());
-
-  // Start HTTP server
-  server.on("/", handleRoot);
-  server.onNotFound(handleNotFound);
-  server.begin();
-
-  // Start websocket
-  webSocket.begin();
-  webSocket.onEvent(webSocketEvent);
-
-  /* Setup connection for MQTT and for subscribed
-    messages IF a server address has been entered
+  /*
+     After running setup() the motor might still have
+     power on some of the coils. This is making sure that
+     power is off the first time loop() has been executed
+     to avoid heating the stepper motor draining
+     unnecessary current
   */
-  if (String(mqtt_server) != "") {
-    Serial.println("Registering MQTT server");
-    psclient.setServer(mqtt_server, String(mqtt_port).toInt());
-    psclient.setCallback(mqttCallback);
-
-  } else {
-    mqttActive = false;
-    Serial.println("NOTE: No MQTT server address has been registered. Only "
-                   "using websockets");
-  }
-
-  /* Set rotation direction of the blinds */
-  if (String(config_rotation) == "false") {
-    ccw = true;
-  } else {
-    ccw = false;
-  }
-
-  // Update webpage
-  INDEX_HTML.replace("{VERSION}", "V" + version);
-  INDEX_HTML.replace("{NAME}", String(config_name));
-
-  // Setup OTA
-  // helper.ota_setup(config_name);
-  {
-    // Authentication to avoid unauthorized updates
-    // ArduinoOTA.setPassword(OTA_PWD);
-
-    ArduinoOTA.setHostname(config_name);
-
-    ArduinoOTA.onStart([]() { Serial.println("Start"); });
-    ArduinoOTA.onEnd([]() { Serial.println("\nEnd"); });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-      Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-    });
-    ArduinoOTA.onError([](ota_error_t error) {
-      Serial.printf("Error[%u]: ", error);
-      if (error == OTA_AUTH_ERROR)
-        Serial.println("Auth Failed");
-      else if (error == OTA_BEGIN_ERROR)
-        Serial.println("Begin Failed");
-      else if (error == OTA_CONNECT_ERROR)
-        Serial.println("Connect Failed");
-      else if (error == OTA_RECEIVE_ERROR)
-        Serial.println("Receive Failed");
-      else if (error == OTA_END_ERROR)
-        Serial.println("End Failed");
-    });
-    ArduinoOTA.begin();
+  if (initLoop) {
+    initLoop = false;
+    stopPowerToCoils();
   }
 }
 
-void loop(void) {
+void old_loop(void) {
   // OTA client code
   ArduinoOTA.handle();
 
