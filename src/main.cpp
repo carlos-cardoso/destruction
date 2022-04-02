@@ -417,7 +417,7 @@ INDEX_HTML.replace("{NAME}", String(config_name));
 }
 */
 
-const int motionSensor = 15; // D8
+const int motionSensor = 14; // D5
 #define timeSeconds 2
 unsigned long now = 0;
 unsigned long lastTrigger = 0;
@@ -455,13 +455,13 @@ void loop() {
   now = millis();
   // Turn off the LED after the number of seconds defined in the timeSeconds
   // variable
-  if (startTimer && (now - lastTrigger > (timeSeconds * 1000))) {
-    Serial.println("Motion stopped...");
-    // digitalWrite(led, LOW);
-    startTimer = false;
-    stopPowerToCoils();
-  } else {
-    if (startTimer && millis() - last_move_ms > 200) {
+  if (startTimer && millis() - last_move_ms > 200) {
+    if (startTimer && (now - lastTrigger > (timeSeconds * 1000))) {
+      Serial.println("Motion stopped...");
+      // digitalWrite(led, LOW);
+      startTimer = false;
+      stopPowerToCoils();
+    } else {
       long path = 1;
       small_stepper.step(ccw ? path : -path);
       currentPosition = currentPosition + path;
